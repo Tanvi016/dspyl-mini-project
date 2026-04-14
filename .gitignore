@@ -1,0 +1,79 @@
+# Node
+/node_modules/
+/frontend/node_modules/
+
+# Build / output
+/dist/
+/build/
+/out/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Environment / secrets
+.env
+.env.*
+
+# Jupyter
+.ipynb_checkpoints/
+# Consider clearing notebook outputs before committing .ipynb files.
+
+# Datasets and large files
+/datasets-notebook/*.csv
+# Use Git LFS or external storage for large datasets instead of committing them.
+
+# Model artifacts / weights
+/backend/models/
+*.pt
+*.pth
+*.h5
+*.ckpt
+*.model
+*.bin
+*.joblib
+
+# Logs
+*.log
+logs/
+
+# Test / coverage
+.pytest_cache/
+coverage/
+htmlcov/
+.coverage
+
+# Packaging
+*.egg-info/
+dist/
+
+# IDE / editor
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Swap / temp
+*.swp
+*~
+
+package-lock.json
+
+insurance-updated-ntbk.ipynb
+Medical_Insurance_Cost_Prediction.ipynb
+
+extract.py
+notebook_code.py
+notebook_utf8.py
+re
