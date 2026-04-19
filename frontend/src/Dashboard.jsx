@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area } from 'recharts';
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area, ScatterChart, Scatter, ZAxis } from 'recharts';
 import { Activity, LayoutDashboard, Calculator, DollarSign, ShieldAlert, Sun, Moon, Brain, IndianRupee, TrendingUp, Info } from 'lucide-react';
 
 const COLORS = ['#4f46e5', '#ec4899', '#06b6d4', '#10b981', '#f59e0b', '#8b5cf6'];
@@ -11,7 +11,6 @@ const Dashboard = ({ dashboardData, theme, currency, formatCurrency }) => {
   const gridColor = theme === 'dark' ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.05)';
   const tooltipBg = theme === 'dark' ? '#1e293b' : '#ffffff';
   const tooltipColor = theme === 'dark' ? '#fff' : '#0f172a';
-
   const ageBucketData = useMemo(() => {
     const ageData = dashboardData?.age_scatter || [];
     if (!ageData.length) return [];
@@ -40,6 +39,38 @@ const Dashboard = ({ dashboardData, theme, currency, formatCurrency }) => {
         range: bucket.label,
         avg_charge: bucket.count ? bucket.total / bucket.count : 0,
       }));
+  }, [dashboardData]);
+  const riskAnalyticsData = useMemo(() => {
+    if (!dashboardData) return { smokers: [], nonSmokers: [], synergistic: [], importance: [] };
+
+    const scatter = dashboardData.bmi_scatter || [];
+    // Random sampling to max 1000 points to prevent browser lag while preserving distribution
+    const sampledScatter = scatter.length > 1000 
+      ? [...scatter].sort(() => 0.5 - Math.random()).slice(0, 1000) 
+      : scatter;
+      
+    const smokers = sampledScatter.filter(d => d.group === 'yes');
+    const nonSmokers = sampledScatter.filter(d => d.group === 'no');
+
+    // 2. Synergistic Risk (Grouped data for obesity/smoking interaction)
+    const combined = dashboardData.combined_risk || [];
+    const categories = ['normal', 'overweight', 'obese'];
+    const synergistic = categories.map(cat => {
+      const smokerNode = combined.find(d => d.bmi_category === cat && d.smoker === 'yes');
+      const nonSmokerNode = combined.find(d => d.bmi_category === cat && d.smoker === 'no');
+      return {
+        category: cat.charAt(0).toUpperCase() + cat.slice(1),
+        'Smoker': smokerNode?.avg_charge || 0,
+        'Non-Smoker': nonSmokerNode?.avg_charge || 0
+      };
+    });
+
+    // 3. Feature Importance (Sorted and labeled)
+    const importance = [...(dashboardData.feature_importance || [])]
+      .sort((a, b) => b.importance - a.importance)
+      .slice(0, 8);
+
+    return { smokers, nonSmokers, synergistic, importance };
   }, [dashboardData]);
 
   if (!dashboardData) {
@@ -135,11 +166,88 @@ const Dashboard = ({ dashboardData, theme, currency, formatCurrency }) => {
       </div>
 
       <div className="dashboard-grid">
+        {/* Row 1: Primary Model Insights */}
+        <div className="dashboard-card xwide">
+          <h3>Feature Importance Ranking (ML Drivers)</h3>
+          <div className="chart-container">
+            <ResponsiveContainer width="100%" height="100%" minHeight={300}>
+              <BarChart layout="vertical" data={riskAnalyticsData.importance} margin={{top: 5, right: 30, left: 10, bottom: 5}}>
+                <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke={gridColor} />
+                <XAxis type="number" tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} hide />
+                <YAxis dataKey="feature" type="category" tick={{fill: tickColor, fontSize: 12}} axisLine={{ stroke: axisColor}} width={150} />
+                <Tooltip 
+                  cursor={{fill: 'rgba(79, 70, 229, 0.05)'}}
+                  contentStyle={{backgroundColor: tooltipBg, border: 'none', borderRadius: '8px', color: tooltipColor, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}}
+                  formatter={(val) => [`${val.toFixed(2)}%`, 'Influence']}
+                />
+                <Bar dataKey="importance" fill="url(#colorImportance)" radius={[0, 4, 4, 0]}>
+                  <defs>
+                    <linearGradient id="colorImportance" x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stopColor="#4f46e5"/>
+                      <stop offset="100%" stopColor="#818cf8"/>
+                    </linearGradient>
+                  </defs>
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="card-insight">
+            <Brain size={14} />
+            <span><b>{riskAnalyticsData.importance[0]?.feature === 'age' ? 'Age' : 'Smoking'} is the top cost driver.</b> The model confirms that {riskAnalyticsData.importance[0]?.feature === 'age' ? 'age-related risk' : 'smoking status'} has the highest impact on predicted annual charges.</span>
+          </div>
+        </div>
+
+        {/* Row 2: Cluster Visualizations */}
+        <div className="dashboard-card xwide">
+          <h3>BMI vs. Charges Risk Clusters</h3>
+          <div className="chart-container">
+            <ResponsiveContainer width="100%" height="100%" minHeight={450}>
+              <ScatterChart margin={{ top: 40, right: 20, bottom: 60, left: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+                <XAxis 
+                  type="number" 
+                  dataKey="x" 
+                  name="BMI" 
+                  unit="" 
+                  tick={{fill: tickColor}} 
+                  axisLine={{ stroke: axisColor}} 
+                  height={60}
+                  label={{ value: 'Body Mass Index (BMI)', position: 'insideBottom', offset: 0, fill: tickColor, fontSize: 13 }} 
+                />
+                <YAxis 
+                  type="number" 
+                  dataKey="y" 
+                  name="Charges" 
+                  tickFormatter={(val) => formatCurrency(val)} 
+                  tick={{fill: tickColor}} 
+                  axisLine={{ stroke: axisColor}} 
+                  width={100} 
+                  label={{ value: 'Avg Annual Charges', angle: -90, position: 'insideLeft', offset: 10, fill: tickColor, fontSize: 13 }} 
+                />
+                <ZAxis type="number" range={[15, 15]} />
+                <Tooltip 
+                  cursor={{ strokeDasharray: '3 3' }} 
+                  contentStyle={{backgroundColor: tooltipBg, border: 'none', borderRadius: '8px', color: tooltipColor, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}}
+                  formatter={(val, name) => [name === 'Charges' ? formatCurrency(val) : val, name]}
+                />
+                <Legend verticalAlign="top" height={50} iconType="circle" />
+                <Scatter name="Smoker (High Risk)" data={riskAnalyticsData.smokers} fill="#ef4444" />
+                <Scatter name="Non-Smoker (Standard Risk)" data={riskAnalyticsData.nonSmokers} fill="#06b6d4" />
+              </ScatterChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="card-insight">
+            <Info size={14} />
+            <span><b>Smokers cost much more as they get heavier.</b> While non-smokers' costs stay flat, smokers (red points) see costs skyrocket as BMI increases.</span>
+          </div>
+        </div>
+
+        {/* Row 3: Age Multipier */}
         <div className="dashboard-card xwide">
           <h3>Avg Charges by Age Gap</h3>
           <div className="chart-container">
             <ResponsiveContainer width="100%" height="100%" minHeight={320}>
-              <AreaChart data={ageBucketData} margin={{top: 10, right: 30, left: 0, bottom: 0}}>
+              <AreaChart data={ageBucketData} margin={{top: 10, right: 30, left: 30, bottom: 10}}>
                 <defs>
                   <linearGradient id="colorCharges" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor="#10b981" stopOpacity={0.85}/>
@@ -152,7 +260,7 @@ const Dashboard = ({ dashboardData, theme, currency, formatCurrency }) => {
                   tick={{fill: tickColor}}
                   axisLine={{ stroke: axisColor}}
                   tickFormatter={(val) => formatCurrency(val)}
-                  width={90}
+                  width={100}
                   domain={[dataMin => Math.max(0, dataMin - 500), dataMax => dataMax + 1500]}
                 />
                 <Tooltip
@@ -171,50 +279,55 @@ const Dashboard = ({ dashboardData, theme, currency, formatCurrency }) => {
           )}
         </div>
 
+        {/* Row 4: Synergistic Risk & BMI Cats */}
+        <div className="dashboard-card wide">
+          <h3>Synergistic Risk (Smoking x Obesity)</h3>
+          <div className="chart-container">
+            <ResponsiveContainer width="100%" height="100%" minHeight={300}>
+              <BarChart data={riskAnalyticsData.synergistic} margin={{top: 20, right: 30, left: 30, bottom: 10}}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridColor} />
+                <XAxis dataKey="category" tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} />
+                <YAxis tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} tickFormatter={(val) => formatCurrency(val)} width={100} />
+                <Tooltip 
+                  contentStyle={{backgroundColor: tooltipBg, border: 'none', borderRadius: '8px', color: tooltipColor, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} 
+                  formatter={(val) => formatCurrency(val)}
+                />
+                <Legend iconType="circle" />
+                <Bar dataKey="Smoker" fill="#ef4444" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Non-Smoker" fill="#10b981" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="card-insight">
+            <ShieldAlert size={14} />
+            <span><b>The "Double Trouble" Effect:</b> Smoking combined with Obesity creates a massive jump in costs—far higher than either risk alone.</span>
+          </div>
+        </div>
+
         <div className="dashboard-card">
-          <h3>Charges Distribution</h3>
+          <h3>BMI Category Charges</h3>
           <div className="chart-container">
             <ResponsiveContainer width="100%" height="100%" minHeight={280}>
-              <BarChart data={dashboardData.charges_distribution} margin={{top: 10, right: 15, left: 0, bottom: 0}}>
+              <BarChart data={dashboardData.bmi_category_charges} margin={{top: 10, right: 10, left: 30, bottom: 10}}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridColor} />
-                <XAxis dataKey="name" tick={{fill: tickColor, fontSize: 11}} axisLine={{ stroke: axisColor}} interval="preserveStartEnd" angle={-45} textAnchor="end" height={80} />
-                <YAxis tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} />
-                <Tooltip contentStyle={{backgroundColor: tooltipBg, border: 'none', borderRadius: '8px', color: tooltipColor, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
-                <Bar dataKey="count" fill="#4f46e5" radius={[4, 4, 0, 0]} />
+                <XAxis dataKey="bmi_category" tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} />
+                <YAxis tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} tickFormatter={(val) => formatCurrency(val)} width={100} />
+                <Tooltip contentStyle={{backgroundColor: tooltipBg, border: 'none', borderRadius: '8px', color: tooltipColor, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} formatter={(val) => formatCurrency(val)} />
+                <Bar dataKey="avg_charge" fill="#f59e0b" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
         </div>
 
-        <div className="dashboard-card">
-          <h3>BMI Distribution</h3>
-          <div className="chart-container">
-            <ResponsiveContainer width="100%" height="100%" minHeight={280}>
-              <LineChart data={dashboardData.bmi_distribution} margin={{top: 10, right: 15, left: 0, bottom: 0}}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridColor} />
-                <XAxis dataKey="name" tick={{fill: tickColor, fontSize: 11}} axisLine={{ stroke: axisColor}} interval="preserveStartEnd" angle={-45} textAnchor="end" height={60} />
-                <YAxis tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} />
-                <Tooltip contentStyle={{backgroundColor: tooltipBg, border: 'none', borderRadius: '8px', color: tooltipColor, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
-                <Line type="monotone" dataKey="count" stroke="#06b6d4" strokeWidth={3} dot={{r: 4, strokeWidth: 2}} activeDot={{r: 6}} />
-              </LineChart>
-            </ResponsiveContainer>
-          </div>
-          {dashboardData.graph_insights?.bmi && (
-            <div className="card-insight">
-              <Activity size={14} />
-              <span>{dashboardData.graph_insights.bmi}</span>
-            </div>
-          )}
-        </div>
-
+        {/* Row 5: Smoking & Region */}
         <div className="dashboard-card">
           <h3>Charges by Smoking Status</h3>
           <div className="chart-container">
             <ResponsiveContainer width="100%" height="100%" minHeight={280}>
-              <BarChart data={dashboardData.smoker_charges} margin={{left: 10, right: 10}}>
+              <BarChart data={dashboardData.smoker_charges} margin={{top: 10, right: 10, left: 30, bottom: 10}}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridColor} />
                 <XAxis dataKey="smoker" tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} />
-                <YAxis tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} tickFormatter={(val) => formatCurrency(val)} width={60} />
+                <YAxis tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} tickFormatter={(val) => formatCurrency(val)} width={100} />
                 <Tooltip contentStyle={{backgroundColor: tooltipBg, border: 'none', borderRadius: '8px', color: tooltipColor, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} formatter={(val) => formatCurrency(val)} />
                 <Bar dataKey="avg_charge" fill="#ef4444" radius={[4, 4, 0, 0]} />
               </BarChart>
@@ -228,85 +341,14 @@ const Dashboard = ({ dashboardData, theme, currency, formatCurrency }) => {
           )}
         </div>
 
-        <div className="dashboard-card">
-          <h3>Population by Gender</h3>
-          <div className="chart-container">
-            <ResponsiveContainer width="100%" height="100%" minHeight={280}>
-              <BarChart data={dashboardData.sex_count || []} margin={{left: 10, right: 10}}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridColor} />
-                <XAxis dataKey="sex" tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} />
-                <YAxis tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} />
-                <Tooltip contentStyle={{backgroundColor: tooltipBg, border: 'none', borderRadius: '8px', color: tooltipColor, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
-                <Bar dataKey="value" fill="#ec4899" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="dashboard-card">
-          <h3>Smoker Population Split</h3>
-          <div className="chart-container">
-            <ResponsiveContainer width="100%" height="100%" minHeight={280}>
-              <PieChart>
-                <Pie 
-                  data={dashboardData.smoker_count || []} 
-                  dataKey="value" 
-                  nameKey="smoker" 
-                  cx="50%" 
-                  cy="50%" 
-                  innerRadius={60} 
-                  outerRadius={80} 
-                  paddingAngle={4}
-                >
-                  {(dashboardData.smoker_count || []).map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip contentStyle={{backgroundColor: tooltipBg, border: 'none', borderRadius: '8px', color: tooltipColor, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} />
-                <Legend verticalAlign="bottom" height={36}/>
-              </PieChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="dashboard-card">
-          <h3>BMI Category Charges</h3>
-          <div className="chart-container">
-            <ResponsiveContainer width="100%" height="100%" minHeight={280}>
-              <BarChart data={dashboardData.bmi_category_charges} margin={{left: 10, right: 10}}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridColor} />
-                <XAxis dataKey="bmi_category" tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} />
-                <YAxis tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} tickFormatter={(val) => formatCurrency(val)} width={60} />
-                <Tooltip contentStyle={{backgroundColor: tooltipBg, border: 'none', borderRadius: '8px', color: tooltipColor, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} formatter={(val) => formatCurrency(val)} />
-                <Bar dataKey="avg_charge" fill="#f59e0b" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
         <div className="dashboard-card wide">
-          <h3>Combined Risk Factors</h3>
-          <div className="chart-container">
-            <ResponsiveContainer width="100%" height="100%" minHeight={280}>
-              <BarChart data={dashboardData.combined_risk} margin={{left: 10, right: 10}}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridColor} />
-                <XAxis dataKey="group" tick={{fill: tickColor, fontSize: 11}} axisLine={{ stroke: axisColor}} interval="preserveStartEnd" angle={-25} textAnchor="end" height={60} />
-                <YAxis tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} tickFormatter={(val) => formatCurrency(val)} width={70} />
-                <Tooltip contentStyle={{backgroundColor: tooltipBg, border: 'none', borderRadius: '8px', color: tooltipColor, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} formatter={(val) => formatCurrency(val)} />
-                <Bar dataKey="avg_charge" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        <div className="dashboard-card">
           <h3>Charges by Region</h3>
           <div className="chart-container">
             <ResponsiveContainer width="100%" height="100%" minHeight={280}>
-              <BarChart data={dashboardData.region_charges} margin={{left: 10, right: 10}}>
+              <BarChart data={dashboardData.region_charges} margin={{top: 10, right: 10, left: 30, bottom: 10}}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={gridColor} />
                 <XAxis dataKey="region" tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} />
-                <YAxis tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} tickFormatter={(val) => formatCurrency(val)} width={70} />
+                <YAxis tick={{fill: tickColor}} axisLine={{ stroke: axisColor}} tickFormatter={(val) => formatCurrency(val)} width={110} />
                 <Tooltip contentStyle={{backgroundColor: tooltipBg, border: 'none', borderRadius: '8px', color: tooltipColor, boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}} formatter={(val) => formatCurrency(val)} />
                 <Bar dataKey="avg_charge" fill="#ec4899" radius={[4, 4, 0, 0]} />
               </BarChart>
@@ -319,7 +361,6 @@ const Dashboard = ({ dashboardData, theme, currency, formatCurrency }) => {
             </div>
           )}
         </div>
-
       </div>
     </div>
   );

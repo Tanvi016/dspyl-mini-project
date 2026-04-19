@@ -44,7 +44,9 @@ async def validation_exception_handler(request, exc):
         }
     )
 
-# Load data -all the csv files
+# -----------------------------------------------------------------------------
+# 1. Data Loading and Initial Preprocessing
+# -----------------------------------------------------------------------------
 base_path = pathlib.Path(__file__).parent.parent
 candidate_files = [
     base_path / 'datasets-notebook' / 'insurance_enhanced_synthetic.csv',
@@ -52,15 +54,17 @@ candidate_files = [
     base_path / 'insurance_enhanced_synthetic.csv',
     base_path / 'insurance_large_cleaned.csv'
 ]
-for path in candidate_files:
-    if path.exists():
-        data_path = path
+
+data_path = None
+for candidate in candidate_files:
+    if candidate.exists():
+        data_path = candidate
         break
-else:
+
+if not data_path:
     raise FileNotFoundError('No insurance dataset found. Expected one of: ' + ', '.join(str(p) for p in candidate_files))
 
 df = pd.read_csv(data_path)
-
 
 enhanced_fields = {'exercise_level', 'policy_type', 'medical_history', 'income_level', 'alcohol_consumption'}
 dataset_has_enhanced_features = enhanced_fields.issubset(set(df.columns))
@@ -73,67 +77,95 @@ categorical_columns = ['sex', 'region']
 if dataset_has_enhanced_features:
     categorical_columns += ['exercise_level', 'policy_type', 'income_level']
 
-# data preprocessing
-processed = df.copy()
-for col in binary_columns:
-    processed[col] = processed[col].map({'yes': 1, 'no': 0})
-if dataset_has_enhanced_features:
-    processed['bmi_smoker'] = processed['bmi'] * processed['smoker']
+# -----------------------------------------------------------------------------
+# 2. Preprocessing Function
+# -----------------------------------------------------------------------------
+def preprocess_dataset(dataframe):
+    processed = dataframe.copy()
+    
+    # Map binary columns
+    for col in binary_columns:
+        if col in processed.columns:
+            processed[col] = processed[col].str.lower().map({'yes': 1, 'no': 0})
+    
+    # Feature Interaction
+    if dataset_has_enhanced_features and 'bmi' in processed.columns and 'smoker' in processed.columns:
+        processed['bmi_smoker'] = processed['bmi'] * processed['smoker']
+    
+    # Categorical Encoding
+    processed = pd.get_dummies(processed, columns=categorical_columns, drop_first=True)
+    return processed
 
-processed = pd.get_dummies(processed, columns=categorical_columns, drop_first=True)
+# Initial Process
+processed_df = preprocess_dataset(df)
+X = processed_df.drop(columns='charges')
+y = processed_df['charges']
+MODEL_FEATURES = X.columns.tolist()
 
-X = processed.drop(columns='charges')
-y = processed['charges']
-
-#to create classification categories - perform label encoding
+# Classification Target
 y_class = pd.qcut(df['charges'], q=3, labels=['Low', 'Medium', 'High'])
 le = LabelEncoder()
 y_class_encoded = le.fit_transform(y_class)
-class_names = le.classes_.tolist() 
+class_names = le.classes_.tolist()
 
+# Splits
 X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 X_train_c, X_test_c, y_train_c, y_test_c = train_test_split(X, y_class_encoded, test_size=0.2, random_state=42)
 
-# Model persistence paths(no need to retrain model - since it causes overfitting)
+# -----------------------------------------------------------------------------
+# 3. Model Management (Load or Train)
+# -----------------------------------------------------------------------------
 model_dir = pathlib.Path(__file__).parent / 'models'
 model_dir.mkdir(exist_ok=True)
 lr_model_path = model_dir / 'linear_regression.pkl'
 rf_model_path = model_dir / 'random_forest.pkl'
 
-# Load or train Linear Regression model
-if lr_model_path.exists():
-    with open(lr_model_path, 'rb') as f:
-        model_lr = pickle.load(f)
-    print("Loaded Linear Regression model from disk")
-else:
-    model_lr = LinearRegression()
-    model_lr.fit(X_train, y_train)
+def train_models():
+    print("🚀 Training models from scratch...")
+    
+    # Linear Regression
+    m_lr = LinearRegression()
+    m_lr.fit(X_train, y_train)
     with open(lr_model_path, 'wb') as f:
-        pickle.dump(model_lr, f)
-    print("Trained and saved Linear Regression model")
-
-# Load or train Random Forest Classifier model
-if rf_model_path.exists():
-    with open(rf_model_path, 'rb') as f:
-        loaded_model = pickle.load(f)
-    if isinstance(loaded_model, RandomForestClassifier):
-        model_rf = loaded_model
-        print("Loaded Random Forest Classifier model from disk")
-    else:
-        print("Existing model is not a Classifier. Retraining...")
-        model_rf = RandomForestClassifier(n_estimators=300, random_state=42)
-        model_rf.fit(X_train_c, y_train_c)
-        with open(rf_model_path, 'wb') as f:
-            pickle.dump(model_rf, f)
-        print("Retrained and saved Random Forest Classifier")
-else:
-    model_rf = RandomForestClassifier(n_estimators=300, random_state=42)
-    model_rf.fit(X_train_c, y_train_c)
+        pickle.dump(m_lr, f)
+        
+    # Random Forest Classifier
+    m_rf = RandomForestClassifier(n_estimators=300, random_state=42)
+    m_rf.fit(X_train_c, y_train_c)
     with open(rf_model_path, 'wb') as f:
-        pickle.dump(model_rf, f)
-    print("Trained and saved Random Forest Classifier model")
+        pickle.dump(m_rf, f)
+        
+    print("✅ Training complete. Models saved.")
+    return m_lr, m_rf
 
-# Model metrics
+# Check and Load
+should_retrain = False
+if not lr_model_path.exists() or not rf_model_path.exists():
+    should_retrain = True
+else:
+    try:
+        with open(lr_model_path, 'rb') as f:
+            model_lr = pickle.load(f)
+        with open(rf_model_path, 'rb') as f:
+            model_rf = pickle.load(f)
+        
+        # Verify feature count compatibility
+        # For sklearn models, check n_features_in_
+        if getattr(model_lr, "n_features_in_", 0) != len(MODEL_FEATURES) or \
+           getattr(model_rf, "n_features_in_", 0) != len(MODEL_FEATURES):
+            print("⚠️ Model feature mismatch detected. Dataset has likely changed.")
+            should_retrain = True
+    except Exception as e:
+        print(f"❌ Error loading models: {e}. Falling back to retraining.")
+        should_retrain = True
+
+if should_retrain:
+    model_lr, model_rf = train_models()
+
+# -----------------------------------------------------------------------------
+# 4. Global Metrics and Importances
+# -----------------------------------------------------------------------------
+# Calculate metrics once
 train_preds_lr = model_lr.predict(X_train)
 test_preds_lr = model_lr.predict(X_test)
 train_r2_lr = metrics.r2_score(y_train, train_preds_lr)
@@ -141,12 +173,11 @@ test_r2_lr = metrics.r2_score(y_test, test_preds_lr)
 test_mae_lr = metrics.mean_absolute_error(y_test, test_preds_lr)
 test_rmse_lr = np.sqrt(metrics.mean_squared_error(y_test, test_preds_lr))
 
-train_preds_rf = model_rf.predict(X_train_c)
 test_preds_rf = model_rf.predict(X_test_c)
 test_acc_rf = metrics.accuracy_score(y_test_c, test_preds_rf)
 test_f1_rf = metrics.f1_score(y_test_c, test_preds_rf, average='weighted')
 
-rf_importances = pd.Series(model_rf.feature_importances_, index=X.columns).sort_values(ascending=False).to_dict()
+rf_importances = pd.Series(model_rf.feature_importances_, index=MODEL_FEATURES).sort_values(ascending=False).to_dict()
 
 
 # ==================================================
@@ -258,24 +289,37 @@ class PredictionInput(BaseModel):
 
 
 def build_feature_row(data: PredictionInput) -> pd.DataFrame:
-    row = {
-        'age': data.age,
-        'bmi': data.bmi,
-        'children': data.children,
-        'smoker': 1 if data.smoker == 'yes' else 0,
-        'medical_history': 1 if data.medical_history == 'yes' else 0,
-        'alcohol_consumption': 1 if data.alcohol_consumption == 'yes' else 0,
+    # 1. Start with a zero-filled DataFrame with fixed structure
+    df_row = pd.DataFrame(0, index=[0], columns=MODEL_FEATURES)
+    
+    # 2. Map direct and binary inputs
+    df_row.at[0, 'age'] = data.age
+    df_row.at[0, 'bmi'] = data.bmi
+    df_row.at[0, 'children'] = data.children
+    
+    smoker_val = 1 if data.smoker == 'yes' else 0
+    df_row.at[0, 'smoker'] = smoker_val
+    
+    if dataset_has_enhanced_features:
+        df_row.at[0, 'medical_history'] = 1 if data.medical_history == 'yes' else 0
+        df_row.at[0, 'alcohol_consumption'] = 1 if data.alcohol_consumption == 'yes' else 0
+        df_row.at[0, 'bmi_smoker'] = data.bmi * smoker_val
+        
+    # 3. Map categorical dummy columns
+    # We look for columns like "sex_male", "region_northwest", etc.
+    cat_inputs = {
         'sex': data.sex,
         'region': data.region,
         'exercise_level': data.exercise_level,
         'policy_type': data.policy_type,
-        'income_level': data.income_level,
+        'income_level': data.income_level
     }
-    df_row = pd.DataFrame([row])
-    if dataset_has_enhanced_features:
-        df_row['bmi_smoker'] = df_row['bmi'] * df_row['smoker']
-    df_row = pd.get_dummies(df_row, columns=categorical_columns, drop_first=True)
-    df_row = df_row.reindex(columns=X.columns, fill_value=0)
+    
+    for prefix, val in cat_inputs.items():
+        column_name = f"{prefix}_{val}"
+        if column_name in df_row.columns:
+            df_row.at[0, column_name] = 1
+            
     return df_row
 
 #Rule-based insights generation based on user input and data.
@@ -305,21 +349,21 @@ def get_personalized_insights(data: PredictionInput, prediction=None, model_type
     else:
         # CLASSIFICATION FOCUS: Risk Clusters & Non-Linear Patterns
         if prediction == 'High':
-            insights.append({"type": "critical", "message": "Cluster Detection: Applicant matches the high-frequency claim profile identified by ensemble trees.", "icon": "ShieldAlert"})
+            insights.append({"type": "critical", "message": "High Claims Profile: Applicant matches the high-cost profile found in our database.", "icon": "ShieldAlert"})
         
         if data.smoker == 'yes' and data.bmi > 30:
-            insights.append({"type": "danger", "message": "Synergistic Risk: The non-linear combination of smoking and obesity creates an exponential risk profile.", "icon": "Activity"})
+            insights.append({"type": "danger", "message": "High Risk Pair: Being both a smoker and obese multiplies the risk of extremely high claims.", "icon": "Activity"})
         elif data.smoker == 'yes':
-            insights.append({"type": "warning", "message": "Tree Branch Analysis: Smoking identified as the priority split-node for High Risk categorization.", "icon": "Brain"})
+            insights.append({"type": "warning", "message": "Smoking Multiplier: Smoking is the single biggest reason for this high estimate.", "icon": "Brain"})
 
         if data.medical_history == 'yes':
-            insights.append({"type": "warning", "message": "Feature Weighting: Pre-existing conditions are a heavy-weight feature in the classifier's risk determination.", "icon": "History"})
+            insights.append({"type": "warning", "message": "Medical History: Past health issues are a major factor in this classification.", "icon": "History"})
 
         if data.exercise_level == 'low':
-            insights.append({"type": "warning", "message": "Probability Shift: Sedentary lifestyle is significantly shifting class probability towards 'High Risk'.", "icon": "TrendingUp"})
+            insights.append({"type": "warning", "message": "Lifestyle Factor: Low exercise frequency pushes this application into the high-cost bracket.", "icon": "TrendingUp"})
         
         if data.income_level == 'high':
-            insights.append({"type": "success", "message": "Mitigation Factor: High income bracket correlates with better health outcomes in current training patterns.", "icon": "CheckCircle"})
+            insights.append({"type": "success", "message": "Safety Factor: High income levels often correlate with better health outcomes.", "icon": "CheckCircle"})
 
     return {
         'valid': True,
@@ -411,7 +455,7 @@ def get_dashboard_data():
     smoker_avg = df_local.groupby('smoker')['charges'].mean()
     if 'yes' in smoker_avg and 'no' in smoker_avg:
         multiplier = smoker_avg['yes'] / smoker_avg['no']
-        smoker_text = f"Smokers incur {multiplier:.1f}x higher average charges compared to non-smokers across this dataset."
+        smoker_text = f"Smokers pay {multiplier:.1f} times more on average than non-smokers in this data."
         insights.append({"text": smoker_text, "icon": "TrendingUp", "type": "danger"})
         graph_insights["smoking"] = smoker_text
 
@@ -420,14 +464,14 @@ def get_dashboard_data():
     bmi_normal_avg = df_local[df_local['bmi'] < 25]['charges'].mean()
     if not np.isnan(bmi_obese_avg) and not np.isnan(bmi_normal_avg):
         bmi_increase = ((bmi_obese_avg / bmi_normal_avg) - 1) * 100
-        bmi_text = f"Obese individuals (BMI 30+) experience a {bmi_increase:.0f}% higher cost than normal weight policyholders."
+        bmi_text = f"High BMI (30+) increases charges by {bmi_increase:.0f}% compared to normal weight."
         insights.append({"text": bmi_text, "icon": "Activity", "type": "warning"})
         graph_insights["bmi"] = bmi_text
 
     # Regional insight
     region_max = df_local.groupby('region')['charges'].mean().idxmax()
     region_max_val = df_local.groupby('region')['charges'].mean().max()
-    region_text = f"The {region_max.title()} region records the highest average policy cost at {region_max_val:,.0f} per annum."
+    region_text = f"{region_max.title()} is the most expensive region, costing about {region_max_val:,.0f} per year."
     insights.append({"text": region_text, "icon": "ShieldAlert", "type": "info"})
     graph_insights["region"] = region_text
 
@@ -435,7 +479,7 @@ def get_dashboard_data():
     age_trend = df_local.groupby('age')['charges'].mean()
     if len(age_trend) > 10:
         decade_increase = (age_trend.loc[50:60].mean() / age_trend.loc[20:30].mean() - 1) * 100
-        age_text = f"Actuarial data shows a {decade_increase:.0f}% cost inflation between the 20s and 50s age brackets."
+        age_text = f"Insurance costs rise by {decade_increase:.0f}% on average as policyholders age from 20 to 60."
         graph_insights["age"] = age_text
 
     response = {
@@ -445,15 +489,15 @@ def get_dashboard_data():
         "average_bmi": float(df_local['bmi'].mean()),
         "charges_distribution": get_histogram('charges'),
         "bmi_distribution": get_histogram('bmi', bins=20),
-        "sex_count": df_local['sex'].value_counts().reset_index().rename(columns={"count": "value"}).to_dict('records'),
-        "smoker_count": df_local['smoker'].value_counts().reset_index().rename(columns={"count": "value"}).to_dict('records'),
-        "children_count": df_local['children'].value_counts().reset_index().rename(columns={"count": "value", "children": "name"}).to_dict('records'),
+        "sex_count": df_local['sex'].value_counts().reset_index().rename(columns={"count": "value", "index": "name"}).to_dict('records'),
+        "smoker_count": df_local['smoker'].value_counts().reset_index().rename(columns={"count": "value", "index": "name"}).to_dict('records'),
+        "children_count": df_local['children'].value_counts().reset_index().rename(columns={"count": "value", "children": "name", "index": "name"}).to_dict('records'),
         "smoker_charges": df_local.groupby('smoker')['charges'].mean().reset_index().rename(columns={"charges": "avg_charge"}).to_dict('records'),
         "bmi_scatter": df_local[['bmi', 'charges', 'smoker']].rename(columns={"bmi": "x", "charges": "y", "smoker": "group"}).to_dict('records'),
         "age_scatter": df_local[['age', 'charges']].rename(columns={"age": "x", "charges": "y"}).to_dict('records'),
         "policy_type_charges": [],
-        "bmi_category_charges": df_local.groupby('bmi_category')['charges'].mean().reset_index().rename(columns={"charges": "avg_charge"}).to_dict('records'),
-        "combined_risk": df_local.groupby(['smoker', 'bmi_category'])['charges'].mean().reset_index().assign(group=lambda x: x['smoker'] + ' / ' + x['bmi_category'].astype(str)).rename(columns={"charges": "avg_charge"}).to_dict('records'),
+        "bmi_category_charges": df_local.groupby('bmi_category', observed=True)['charges'].mean().reset_index().rename(columns={"charges": "avg_charge"}).to_dict('records'),
+        "combined_risk": df_local.groupby(['smoker', 'bmi_category'], observed=True)['charges'].mean().reset_index().assign(group=lambda x: x['smoker'] + ' / ' + x['bmi_category'].astype(str)).rename(columns={"charges": "avg_charge"}).to_dict('records'),
         "feature_importance": [{"feature": k, "importance": float(v * 100)} for k, v in rf_importances.items()],
         "region_charges": df_local.groupby('region')['charges'].mean().reset_index().rename(columns={"charges": "avg_charge"}).to_dict('records'),
         "total_records": len(df_local),

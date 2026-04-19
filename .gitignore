@@ -72,6 +72,8 @@ package-lock.json
 
 insurance-updated-ntbk.ipynb
 Medical_Insurance_Cost_Prediction.ipynb
+insurance-updated-ntbk(1).ipynb
+docs/
 
 extract.py
 notebook_code.py
